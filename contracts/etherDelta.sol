@@ -157,7 +157,7 @@ contract EtherDelta is SafeMath {
         throw;
     }
 
-    function deposit() {
+    function deposit() payable public {
         tokens[0][msg.sender] = safeAdd(tokens[0][msg.sender], msg.value);
         Deposit(0, msg.sender, msg.value, tokens[0][msg.sender]);
     }
@@ -241,10 +241,5 @@ contract EtherDelta is SafeMath {
         if (ecrecover(hash,v,r,s) != msg.sender) throw;
         orderFills[hash] = amountGet;
         Cancel(tokenGet, amountGet, tokenGive, amountGive, expires, nonce, msg.sender, v, r, s);
-    }
-
-    function ecrecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) public returns (address)
-    {
-        return ecrecover(hash,v,r,s);
     }
 }

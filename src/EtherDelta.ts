@@ -1,20 +1,18 @@
-import {provider as Provider,
-    Wallet, Contract, utils, SigningKey} from 'ethers';
+import {provider as Provider, Contract, utils} from 'ethers';
 import {ecsign, toBuffer, bufferToHex} from "ethereumjs-util";
 import * as VError from 'verror';
 import * as logger from 'config-logger';
 import * as BN from 'bn.js';
 
-import BaseContract from './BaseContract';
-import {KeyStore} from './keyStore/index.d';
+import BaseContract, {SendOptions} from './BaseContract';
 import {TransactionReceipt} from './index';
 
 const ether2WeiMultiplier = new BN('1000000000000000000');
 
-export interface ISignature {
+interface ISignature {
     v: number,
-    r: Uint8Array,
-    s: Uint8Array
+    r: String,
+    s: String
 }
 
 export interface IEtherTrade {
@@ -25,77 +23,26 @@ export interface IEtherTrade {
 }
 export default class EtherDelta extends BaseContract
 {
-    constructor(readonly transactionsProvider: Provider, readonly eventsProvider: Provider,
-                readonly keyStore: KeyStore,
-                readonly jsonInterface: object[], readonly contractBinary?: string,
-                contractAddress?: string,
-                readonly defaultGasPrice = 1000000000, readonly defaultGasLimit = 120000)
-    {
-        // TODO is this contructor even need to be declared here?
-
-        super(transactionsProvider, eventsProvider, keyStore, jsonInterface,
-            contractBinary, contractAddress, defaultGasPrice, defaultGasLimit);
-    }
-
-    deployContract(contractOwner: string, gasLimit: number, gasPrice: number,
+    deployContract(contractOwner: string, sendOptions: SendOptions = {gasLimit: 2000000},
                    feeAccount: string, feeMake: number, feeTake: number): Promise<TransactionReceipt> {
-        return super.deployContract(contractOwner, gasLimit, gasPrice, feeAccount, feeMake, feeTake);
+        return super.deployContract(contractOwner, sendOptions, feeAccount, feeMake, feeTake);
     }
 
     // deposit ether into the EtherDelta contract
-    depositEther(txSignerAddress: string, etherAmount: BN,
-             gasLimit: number = 25000,
-             gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    depositEther(txSignerAddress: string, etherAmount: BN, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
+        const weiAmount = etherAmount.mul(ether2WeiMultiplier);
 
-        if (!(etherAmount instanceof BN))
-        {
-            const error = new VError(`etherAmount was not an instanceof BN (BigNumber).`);
-            logger.error(error.stack);
-            throw error;
-        }
-
-        const description = `deposit ${etherAmount.toString()} ether with tx signer address ${txSignerAddress}, by calling the deposit function on the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
-
-                const weiAmount = etherAmount.mul(ether2WeiMultiplier);
-
-                // send the transaction
-                const broadcastTransaction = await contract.deposit({
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit,
-                    value: '0x' + weiAmount.toString(16)
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
+        const newSendOptions = Object.assign({}, sendOptions, {
+            value: '0x' + weiAmount.toString(16)
         });
+
+        return super.send("deposit", txSignerAddress, newSendOptions);
     }
 
-    // deposit ether into the EtherDelta contract
-    depositToken(txSignerAddress: string, tokenAddress: string, tokenAmount: BN,
-                 gasLimit: number = 100000,
-                 gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    // deposit tokens into the EtherDelta contract
+    depositToken(txSignerAddress: string, tokenAddress: string, tokenAmount: BN, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
-
         if (!(tokenAmount instanceof BN))
         {
             const error = new VError(`tokenAmount was not an instanceof BN (BigNumber).`);
@@ -103,44 +50,18 @@ export default class EtherDelta extends BaseContract
             throw error;
         }
 
-        const description = `deposit ${tokenAmount.toString()} tokens at address ${tokenAddress} with tx signer address ${txSignerAddress} into the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
-
-                const hexTokenAmount = '0x' + tokenAmount.toString(16);
-
-                // send the transaction
-                const broadcastTransaction = await contract.depositToken(tokenAddress, hexTokenAmount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        return super.send("depositToken", txSignerAddress, sendOptions, tokenAddress, '0x' + tokenAmount.toString(16));
     }
 
-    withdrawToken(txSignerAddress: string, tokenAddress: string, tokenAmount: BN,
-                 gasLimit: number = 100000,
-                 gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    withdrawEther(txSignerAddress: string, etherAmount: BN, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
+        const weiAmount = etherAmount.mul(ether2WeiMultiplier);
 
+        return super.send("withdraw", txSignerAddress, sendOptions, '0x' + weiAmount.toString(16));
+    }
+
+    withdrawToken(txSignerAddress: string, tokenAddress: string, tokenAmount: BN, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
+    {
         if (!(tokenAmount instanceof BN))
         {
             const error = new VError(`tokenAmount was not an instanceof BN (BigNumber).`);
@@ -148,235 +69,76 @@ export default class EtherDelta extends BaseContract
             throw error;
         }
 
-        const description = `withdraw ${tokenAmount.toString()} tokens at address ${tokenAddress} with tx signer address ${txSignerAddress} from the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
-
-                const hexTokenAmount = '0x' + tokenAmount.toString(16);
-
-                // send the transaction
-                const broadcastTransaction = await contract.withdrawToken(tokenAddress, hexTokenAmount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        return super.send("withdrawToken", txSignerAddress, sendOptions, tokenAddress, '0x' + tokenAmount.toString(16));
     }
 
-    placeOrder(txSignerAddress:string, getTokenAddress: string, getTokenAmount: BN, giveTokenAddress: string, giveTokenAmount: BN,
-                  expires: number, nonce: number,
-                  gasLimit: number = 35000,
-                  gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    async signOrder(txSignerAddress:string, getTokenAddress: string, getTokenAmount: BN, giveTokenAddress: string, giveTokenAmount: BN,
+              expires: number, nonce: number): Promise<[ISignature, (string|number)[]]>
     {
-        const self = this;
+        // params in Solidity: address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, uint8 v, bytes32 r, bytes32 s)
+        const orderParams = [
+            getTokenAddress,
+            '0x' + getTokenAmount.toString(16),
+            giveTokenAddress,
+            '0x' + giveTokenAmount.toString(16),
+            expires,
+            nonce];
 
-        const description = `place order for ${getTokenAmount.toString()} taker tokens with address ${getTokenAddress}, ${giveTokenAmount.toString()} taker tokens with address ${giveTokenAddress}, tx signer address ${txSignerAddress}, expires ${expires.toString()}, nonce ${nonce} from the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
+        const orderHash = utils.soliditySha256(
+            ['address','uint','address', 'uint','uint','uint'],
+            orderParams);
 
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
+        const privateKey = await this.keyStore.getPrivateKey(txSignerAddress);
 
-                const orderParams = [
-                    getTokenAddress,
-                    '0x' + getTokenAmount.toString(16),
-                    giveTokenAddress,
-                    '0x' + giveTokenAmount.toString(16),
-                    expires,
-                    nonce];
+        const signature = ecsign(
+            toBuffer(orderHash),
+            toBuffer(privateKey));
 
-                const orderHash = utils.soliditySha256(
-                    ['address','uint','address', 'uint','uint','uint'],
-                    orderParams);
+        const convertedSignature = {
+            r: bufferToHex(signature.r),
+            s: bufferToHex(signature.s),
+            v: signature.v
+        };
 
-                const signature = ecsign(
-                    toBuffer(orderHash),
-                    toBuffer(privateKey));
-
-                const r = bufferToHex(signature.r);
-                const s = bufferToHex(signature.s);
-                const v = bufferToHex(signature.v);
-
-                logger.debug(`Order hash ${orderHash} has r ${signature.r}, s ${signature.s} and v ${v} values for ${description}`);
-
-                // send the transaction
-                //address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, uint8 v, bytes32 r, bytes32 s) {
-                const broadcastTransaction = await contract.order(
-                    ...orderParams, v, r, s,
-                    {
-                        gasPrice: gasPrice,
-                        gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        logger.debug(`Order hash ${orderHash} has r ${convertedSignature.r}, s ${convertedSignature.s} and v ${convertedSignature.v} values for order`);
+        
+        return [convertedSignature, orderParams];
     }
 
-    cancelOrder(txSignerAddress:string, getTokenAddress: string, getTokenAmount: BN, giveTokenAddress: string, giveTokenAmount: BN,
-               expires: number, nonce: number,
-               gasLimit: number = 2000000,
-               gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    async placeOrder(txSignerAddress:string, getTokenAddress: string, getTokenAmount: BN, giveTokenAddress: string, giveTokenAmount: BN,
+                  expires: number, nonce: number, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
+        const [sig, orderParams] = await this.signOrder(...arguments);
 
-        const description = `cancel order for ${getTokenAmount.toString()} taker tokens with address ${getTokenAddress}, ${giveTokenAmount.toString()} taker tokens with address ${giveTokenAddress}, tx signer address ${txSignerAddress}, expires ${expires.toString()}, nonce ${nonce} from the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
+        return super.send("order", txSignerAddress, sendOptions, ...orderParams,  sig.v, sig.r, sig.s);
+    }
 
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
+    async cancelOrder(txSignerAddress:string, getTokenAddress: string, getTokenAmount: BN, giveTokenAddress: string, giveTokenAmount: BN,
+               expires: number, nonce: number, sendOptions: SendOptions = this.defaultSendOptions): Promise<TransactionReceipt>
+    {
+        const [sig, orderParams] = await this.signOrder(...arguments);
 
-                const orderParams = [
-                    getTokenAddress,
-                    '0x' + getTokenAmount.toString(16),
-                    giveTokenAddress,
-                    '0x' + giveTokenAmount.toString(16),
-                    expires,
-                    nonce];
-
-                const orderHash = utils.soliditySha256(
-                    ['address','uint','address', 'uint','uint','uint'],
-                    orderParams);
-
-                const orderSignature = wallet.signMessage(orderHash);
-
-                // send the transaction
-                //cancelOrder(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, uint8 v, bytes32 r, bytes32 s) {
-                const broadcastTransaction = await contract.cancelOrder(
-                    ...orderParams,
-                    '0x' + orderSignature.slice(130, 132),
-                    orderSignature.slice(0, 66),
-                    '0x' + orderSignature.slice(66, 130),
-                    {
-                        gasPrice: gasPrice,
-                        gasLimit: gasLimit
-                    });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        return super.send("cancelOrder", txSignerAddress, sendOptions, ...orderParams,  sig.v, sig.r, sig.s);
     }
 
     async getFeeAccount(): Promise<string>
     {
-        const description = `address of fee account for EtherDelta contract at address ${this.contract.address}`;
-
-        try
-        {
-            const result = await this.contract.feeAccount();
-            const feeAccount = result[0];
-
-            logger.info(`Got ${feeAccount} ${description}`);
-            return feeAccount;
-        }
-        catch (err)
-        {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+        return super.call("feeAccount");
     }
 
     async getMakerFee(): Promise<BN>
     {
-        const description = `maker fee as a percentage of 1 Ether for the EtherDelta contract at address ${this.contract.address}`;
-
-        try
-        {
-            const result = await this.contract.feeMake();
-            const feeMake = result[0]._bn;
-
-            logger.info(`Got ${feeMake} ${description}`);
-            return feeMake;
-        }
-        catch (err)
-        {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+        return super.call("feeMake");
     }
 
     async getTakerFee(): Promise<BN>
     {
-        const description = `maker fee as a percentage of 1 Ether for the EtherDelta contract at address ${this.contract.address}`;
-
-        try
-        {
-            const result = await this.contract.feeTake();
-            const feeTake = result[0]._bn;
-
-            logger.info(`Got ${feeTake} ${description}`);
-            return feeTake;
-        }
-        catch (err)
-        {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+        return super.call("feeTake");
     }
 
     async getBalanceOf(token: string, user: string): Promise<BN>
     {
-        const description = `balance of tokens with address ${token} for user ${user} for the EtherDelta contract at address ${this.contract.address}`;
-
-        try
-        {
-            const result = await this.contract.balanceOf(token, user);
-            const feeTake = result[0]._bn;
-
-            logger.info(`Got ${feeTake} ${description}`);
-            return feeTake;
-        }
-        catch (err)
-        {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+        return super.call("balanceOf", token, user);
     }
 
     async getEtherTrades(fromBlock = 3154196): Promise<IEtherTrade[]>
@@ -412,42 +174,5 @@ export default class EtherDelta extends BaseContract
         }
 
         return etherTrades;
-    }
-
-    ecrecover(txSignerAddress:string, hash: string, v: number, r: string, s: string,
-                gasLimit: number = 3000000,
-                gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
-    {
-        const self = this;
-
-        const description = `ecrecover from the EtherDelta contract ${self.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-
-        return new Promise<TransactionReceipt>(async (resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
-
-                // send the transaction
-                //ecrecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) public returns (address)
-                const broadcastTransaction = await contract.ecrecover(hash, v, r, s, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
     }
 }

@@ -1,100 +1,37 @@
 import {provider as Provider} from 'ethers';
-import * as VError from 'verror';
-import * as logger from 'config-logger';
 import {Wallet, Contract} from 'ethers';
 
 import Token from './Token';
 
 import {KeyStore} from './keyStore/index.d';
 import {TransactionReceipt} from './index';
+import {SendOptions} from "./BaseContract";
 
 export default class IssuableToken extends Token
 {
     constructor(readonly transactionsProvider: Provider, readonly eventsProvider: Provider,
                 readonly keyStore: KeyStore,
                 jsonInterface: object[], contractBinary?: string, contractAddress?: string,
-                readonly defaultGasPrice = 1000000000, readonly defaultGasLimit = 120000)
+                readonly defaultSendOptions: SendOptions = {
+                    gasPrice: 2000000000,
+                    gasLimit: 1200000})
     {
         super(transactionsProvider, eventsProvider, keyStore, jsonInterface,
-            contractBinary, contractAddress, defaultGasPrice, defaultGasLimit);
+            contractBinary, contractAddress, defaultSendOptions);
     }
 
-    // deploy a new web3Contract
-    deployContract(contractOwner: string, gasLimit: number, gasPrice: number, symbol: string, tokenName: string): Promise<TransactionReceipt>
+    deployContract(contractOwner: string, sendOptions: SendOptions = {gasLimit: 2000000}, symbol: string, tokenName: string): Promise<TransactionReceipt>
     {
-        return super.deployContract(contractOwner, gasLimit, gasPrice, symbol, tokenName);
+        return super.deployContract(contractOwner, sendOptions, symbol, tokenName);
     }
 
-    // deposit an amount of tokens to an address
-    deposit(contractOwner: string, toAddress: string, amount: number,
-            gasLimit: number = this.defaultGasLimit,
-            gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    deposit(txSignerAddress: string, toAddress: string, amount: number, sendOptions?: SendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
-
-        const description = `deposit ${amount} tokens to address ${toAddress}, from sender address ${contractOwner}, contract ${this.contract.address}, gas limit ${gasLimit} (0x${gasLimit.toString(16)}) and gas price ${gasPrice} (0x${gasPrice.toString(16)})`;
-
-        return new Promise<TransactionReceipt>(async(resolve, reject) =>
-        {
-            try
-            {
-                // send the transaction
-                const broadcastTransaction = await self.contract.deposit(toAddress, amount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err)
-            {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        return super.send("deposit", txSignerAddress, sendOptions, toAddress, amount);
     }
 
-    // token hold withdraws an amount of tokens
-    withdraw(tokenHolderAddress: string, amount: number,
-              gasLimit: number = this.defaultGasLimit,
-              gasPrice: number = this.defaultGasPrice): Promise<TransactionReceipt>
+    withdraw(txSignerAddress: string, amount: number, sendOptions?: SendOptions): Promise<TransactionReceipt>
     {
-        const self = this;
-
-        const description = `request withdraw of ${amount} tokens from contract ${this.contract.address} and token holder ${tokenHolderAddress}`;
-
-        return new Promise<TransactionReceipt>(async(resolve, reject) =>
-        {
-            try
-            {
-                const privateKey = await self.keyStore.getPrivateKey(tokenHolderAddress);
-                const wallet = new Wallet(privateKey, self.transactionsProvider);
-
-                const contract = new Contract(self.contract.address, self.jsonInterface, wallet);
-
-                // send the transaction
-                const broadcastTransaction = await contract.withdraw(amount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-
-                resolve(transactionReceipt);
-            }
-            catch (err)
-            {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+        return super.send("withdraw", txSignerAddress, sendOptions, amount);
     }
 }

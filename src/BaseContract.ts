@@ -7,6 +7,12 @@ import {readFileSync} from 'fs';
 import {KeyStore} from './keyStore/index.d';
 import {TransactionReceipt} from './index';
 
+export interface SendOptions {
+    gasLimit?: number,
+    gasPrice?: number,
+    value?: string
+}
+
 export default class BaseContract
 {
     contract: object;
@@ -15,17 +21,22 @@ export default class BaseContract
                 readonly keyStore: KeyStore,
                 readonly jsonInterface: object[], readonly contractBinary?: string,
                 contractAddress?: string,
-                readonly defaultGasPrice = 1000000000, readonly defaultGasLimit = 120000)
+                readonly defaultSendOptions: SendOptions = {
+                    gasPrice: 1000000000,
+                    gasLimit: 1200000})
     {
         this.contract = new Contract(contractAddress, jsonInterface, this.transactionsProvider);
     }
 
     // deploy a new contract
-    deployContract(contractOwner: string, gasLimit: number, gasPrice: number, ...contractConstructorParams: any[]): Promise<TransactionReceipt>
+    deployContract(contractOwner: string, overrideSendOptions?: SendOptions, ...contractConstructorParams: any[]): Promise<TransactionReceipt>
     {
         const self = this;
 
-        const description = `deploy contract from sender address ${contractOwner}, gas limit ${gasLimit} and gas price ${gasPrice}`;
+        // override the default send options
+        const sendOptions = Object.assign({}, this.defaultSendOptions, overrideSendOptions);
+
+        const description = `deploy contract from sender address ${contractOwner}, gas limit ${sendOptions.gasLimit} and gas price ${sendOptions.gasPrice}`;
 
         return new Promise<TransactionReceipt>(async (resolve, reject) =>
         {
@@ -45,17 +56,14 @@ export default class BaseContract
 
                 const wallet = new Wallet(privateKey, self.transactionsProvider);
 
-                const deployTransaction = Object.assign(deployTransactionData, {
-                    gasPrice: gasPrice || self.defaultGasPrice,
-                    gasLimit: gasLimit || self.defaultGasLimit
-                });
+                const deployTransaction = Object.assign(deployTransactionData, sendOptions);
 
                 // Send the transaction
                 const broadcastTransaction = await wallet.sendTransaction(deployTransaction);
 
                 logger.debug(`${broadcastTransaction.hash} is transaction hash for ${description}`);
 
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
+                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, sendOptions.gasLimit);
 
                 self.contract = new Contract(transactionReceipt.contractAddress, self.jsonInterface, wallet);
 
@@ -63,6 +71,73 @@ export default class BaseContract
             }
             catch (err)
             {
+                const error = new VError(err, `Failed to ${description}.`);
+                logger.error(error.stack);
+                reject(error);
+            }
+        });
+    }
+
+    async call(functionName: string, ...callParams: any[]): Promise<any>
+    {
+        const description = `calling function ${functionName} with params ${callParams.toString()} on contract with address ${this.contract.address}`;
+
+        try
+        {
+            const results = await this.contract[functionName](...callParams);
+
+            let result = results[0];
+
+            // if an Ethers BigNumber
+            if (results[0]._bn)
+            {
+                // convert to a bn.js BigNumber
+                result = results[0]._bn;
+            }
+            
+            logger.info(`Got ${result} ${description}`);
+            return result;
+        }
+        catch (err)
+        {
+            const error = new VError(err, `Could not get ${description}`);
+            logger.error(error.stack);
+            throw error;
+        }
+    }
+
+    async send(functionName: string, txSignerAddress: string, overrideSendOptions?: SendOptions, ...callParams: any[]): Promise<TransactionReceipt>
+    {
+        const self = this;
+
+        // override the default send options
+        const sendOptions = Object.assign({}, this.defaultSendOptions, overrideSendOptions);
+
+        const description = `send transaction to function ${functionName} with parameters ${callParams}, gas limit ${sendOptions.gasLimit} and gas price ${sendOptions.gasPrice} on contract with address ${this.contract.address}`;
+
+        return new Promise<TransactionReceipt>(async (resolve, reject) =>
+        {
+            try
+            {
+                let contract: Contract = self.contract;
+
+                if (txSignerAddress)
+                {
+                    const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
+                    const wallet = new Wallet(privateKey, self.transactionsProvider);
+                    contract = new Contract(self.contract.address, self.jsonInterface, wallet);
+                }
+
+                // send the transaction
+                const broadcastTransaction = await contract[functionName](...callParams, sendOptions);
+
+                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
+
+                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, sendOptions.gasLimit);
+
+                resolve(transactionReceipt);
+            }
+            catch (err) {
                 const error = new VError(err, `Failed to ${description}.`);
                 logger.error(error.stack);
                 reject(error);
@@ -162,14 +237,14 @@ export default class BaseContract
         }
     }
 
-    static loadJsonInterfaceFromFile(filename: string): object[] {
-
-        const jsonInterfaceStr = readFileSync(filename, 'utf8');
+    static loadJsonInterfaceFromFile(filename: string): object[]
+    {
+        const jsonInterfaceStr = readFileSync(filename + ".abi", 'utf8');
         return JSON.parse(jsonInterfaceStr);
     }
 
     static loadBinaryFromFile(filename: string): string
     {
-        return '0x' + readFileSync(filename, 'utf8');
+        return '0x' + readFileSync(filename + ".bin", 'utf8');
     }
 }

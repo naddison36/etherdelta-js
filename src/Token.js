@@ -1,143 +1,56 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const ethers_1 = require("ethers");
-const logger = require("config-logger");
 const VError = require("verror");
 const BaseContract_1 = require("./BaseContract");
 class Token extends BaseContract_1.default {
-    constructor(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultGasPrice = 1000000000, defaultGasLimit = 120000) {
-        super(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultGasPrice, defaultGasLimit);
+    constructor(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultSendOptions) {
+        super(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultSendOptions);
         this.transactionsProvider = transactionsProvider;
         this.eventsProvider = eventsProvider;
         this.keyStore = keyStore;
         this.jsonInterface = jsonInterface;
         this.contractBinary = contractBinary;
-        this.defaultGasPrice = defaultGasPrice;
-        this.defaultGasLimit = defaultGasLimit;
+        this.defaultSendOptions = defaultSendOptions;
         this.transactions = {};
+        this.contract = new ethers_1.Contract(contractAddress, jsonInterface, this.transactionsProvider);
     }
-    // deploy a new contract
-    deployContract(contractOwner, gasLimit, gasPrice, symbol, tokenName) {
-        return super.deployContract(contractOwner, gasLimit, gasPrice, symbol, tokenName);
+    deployContract(contractOwner, sendOptions, symbol = "TOK", tokenName = "Token name") {
+        return super.deployContract(contractOwner, sendOptions, symbol, tokenName);
     }
     // transfer an amount of tokens from one address to another
-    transfer(fromAddress, toAddress, amount, gasLimit = this.defaultGasLimit, gasPrice = this.defaultGasPrice) {
-        const self = this;
-        const description = `transfer ${amount} tokens from address ${fromAddress}, to address ${toAddress}, contract ${this.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-        return new Promise(async (resolve, reject) => {
-            try {
-                const privateKey = await self.keyStore.getPrivateKey(fromAddress);
-                const wallet = new ethers_1.Wallet(privateKey, self.transactionsProvider);
-                const contract = new ethers_1.Contract(self.contract.address, self.jsonInterface, wallet);
-                // send the transaction
-                const broadcastTransaction = await contract.transfer(toAddress, amount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+    transfer(fromAddress, toAddress, amount, sendOptions) {
+        return super.send("transfer", fromAddress, sendOptions, toAddress, amount);
     }
-    approve(transactionSigner, spenderAddress, amount, gasLimit = this.defaultGasLimit, gasPrice = this.defaultGasPrice) {
-        const self = this;
-        const description = `${transactionSigner} approves ${amount} tokens can be spent by ${spenderAddress} in token contract ${this.contract.address}, gas limit ${gasLimit} and gas price ${gasPrice}`;
-        return new Promise(async (resolve, reject) => {
-            try {
-                const privateKey = await self.keyStore.getPrivateKey(transactionSigner);
-                const wallet = new ethers_1.Wallet(privateKey, self.transactionsProvider);
-                const contract = new ethers_1.Contract(self.contract.address, self.jsonInterface, wallet);
-                // send the transaction
-                const broadcastTransaction = await contract.approve(spenderAddress, amount, {
-                    gasPrice: gasPrice,
-                    gasLimit: gasLimit
-                });
-                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
-                resolve(transactionReceipt);
-            }
-            catch (err) {
-                const error = new VError(err, `Failed to ${description}.`);
-                logger.error(error.stack);
-                reject(error);
-            }
-        });
+    approve(txSignerAddress, spenderAddress, value, sendOptions) {
+        return super.send("approve", txSignerAddress, sendOptions, spenderAddress, value);
     }
-    async getSymbol() {
-        const description = `symbol of contract at address ${this.contract.address}`;
-        try {
-            const result = await this.contract.symbol();
-            const symbol = result[0];
-            logger.info(`Got ${symbol} ${description}`);
-            return symbol;
-        }
-        catch (err) {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+    increaseApproval(txSignerAddress, spenderAddress, value, sendOptions) {
+        return super.send("increaseApproval", txSignerAddress, sendOptions, spenderAddress, value);
     }
-    async getName() {
-        const description = `name of contract at address ${this.contract.address}`;
-        try {
-            const result = await this.contract.name();
-            const name = result[0];
-            logger.info(`Got "${name}" ${description}`);
-            return name;
-        }
-        catch (err) {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+    decreaseApproval(txSignerAddress, spenderAddress, value, sendOptions) {
+        return super.send("decreaseApproval", txSignerAddress, sendOptions, spenderAddress, value);
     }
-    async getDecimals() {
-        const description = `number of decimals for contract at address ${this.contract.address}`;
-        try {
-            const result = await this.contract.decimals();
-            const decimals = result[0];
-            logger.info(`Got ${decimals} ${description}`);
-            return decimals;
-        }
-        catch (err) {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+    transferFrom(txSignerAddress, fromAddress, toAddress, amount, sendOptions) {
+        return super.send("transferFrom", txSignerAddress, sendOptions, fromAddress, toAddress, amount);
     }
-    async getTotalSupply() {
-        const description = `total supply of contract at address ${this.contract.address}`;
-        try {
-            const result = await this.contract.totalSupply();
-            const totalSupply = result[0]._bn;
-            logger.info(`Got ${totalSupply.toString()} ${description}`);
-            return totalSupply;
-        }
-        catch (err) {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+    getSymbol() {
+        return super.call("symbol");
     }
-    async getBalanceOf(address) {
-        const description = `balance of address ${address} in contract at address ${this.contract.address}`;
-        try {
-            const result = await this.contract.balanceOf(address);
-            const balance = result[0]._bn;
-            logger.info(`Got ${balance} ${description}`);
-            return balance;
-        }
-        catch (err) {
-            const error = new VError(err, `Could not get ${description}`);
-            logger.error(error.stack);
-            throw error;
-        }
+    getName() {
+        return super.call("name");
+    }
+    getDecimals() {
+        return super.call("decimals");
+    }
+    getTotalSupply() {
+        return super.call("totalSupply");
+    }
+    getAllowance(ownerAddress, spenderAddress) {
+        return super.call("allowance", ownerAddress, spenderAddress);
+    }
+    getBalanceOf(address) {
+        return super.call("balanceOf", address);
     }
     async getHolderBalances() {
         const description = `all token holder balances from contract address ${this.contract.address}`;

@@ -1,0 +1,91 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const ethers_1 = require("ethers");
+const ethereumjs_util_1 = require("ethereumjs-util");
+const TestCrypto_1 = require("../TestCrypto");
+const BaseContract_1 = require("../BaseContract");
+const keyStore_hardcoded_1 = require("../keyStore/keyStore-hardcoded");
+const testCryptoContractOwner = '0x2e988A386a799F506693793c6A5AF6B54dfAaBfB';
+// bytes32 hash = sha256(tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
+// "0x7564105E977516C53bE337314c7E53838967bDaC", 10, "0xe1fAE9b4fAB2F5726677ECfA912d96b0B683e6a9", 20, 1000, 0
+// "0": "bytes32: 0x5965b604c8a3aeea98bac96fde194ce36307b45c97048484c9662ef3320baed2"
+const orderParams = ['0x7564105E977516C53bE337314c7E53838967bDaC', 10, "0xe1fAE9b4fAB2F5726677ECfA912d96b0B683e6a9", 20, 1000, 0];
+const expectOrderHash = '0x5965b604c8a3aeea98bac96fde194ce36307b45c97048484c9662ef3320baed2';
+const chainId = 0;
+describe("TestCrypto", () => {
+    const rpcProvider = process.env.RPCPROVIDER || "http://localhost:8646";
+    const transactionsProvider = new ethers_1.providers.JsonRpcProvider(rpcProvider, true, chainId);
+    const eventsProvider = new ethers_1.providers.JsonRpcProvider(rpcProvider, true, chainId);
+    const keyStore = new keyStore_hardcoded_1.default();
+    const jsonInterface = BaseContract_1.default.loadJsonInterfaceFromFile('./bin/contracts/TestCrypto');
+    const contractBinary = BaseContract_1.default.loadBinaryFromFile('./bin/contracts/TestCrypto');
+    const cryptoTest = new TestCrypto_1.default(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, null // contract address
+    );
+    beforeAll(async () => {
+        await cryptoTest.deployContract(testCryptoContractOwner);
+    });
+    test("solidity sha256 of order params", async () => {
+        expect.assertions(2);
+        const ethersShaHash = ethers_1.utils.soliditySha256(['address', 'uint256', 'address', 'uint256', 'uint256', 'uint256'], orderParams);
+        expect(ethersShaHash).toEqual(expectOrderHash);
+        const solidityShaHash = await cryptoTest.signOrder(...orderParams);
+        expect(ethersShaHash).toEqual(solidityShaHash);
+    });
+    test("testOrderHash", async () => {
+        expect.assertions(1);
+        expect(await cryptoTest.testOrderHash('0x5965b604c8a3aeea98bac96fde194ce36307b45c97048484c9662ef3320baed2', ...orderParams)).toBeTruthy();
+    });
+    test("Ethereumjs-tx signing and recovering using secp256k1", async () => {
+        expect.assertions(4);
+        const messageBuffer = ethereumjs_util_1.toBuffer(expectOrderHash);
+        const signature = ethereumjs_util_1.ecsign(messageBuffer, // message
+        ethereumjs_util_1.toBuffer('0x1111111111111111111111111111111111111111111111111111111111111111')); // privateKey
+        const r = ethereumjs_util_1.bufferToHex(signature.r);
+        const s = ethereumjs_util_1.bufferToHex(signature.s);
+        const v = signature.v;
+        expect(r).toEqual('0x9bffbe28cec8656bf6cbdff5f4159d220c0a2a1b1740646430cccea2f7c80491');
+        expect(s).toEqual('0x534f7a8cb7574806f7f428340c2fc1bd5baa919492ca06b2a28967a1d4db5a5a');
+        expect(v).toEqual(27);
+        const recoveredPublicKeyBuffer = ethereumjs_util_1.ecrecover(messageBuffer, signature.v, signature.r, signature.s);
+        const recoveredPublicKey = ethereumjs_util_1.bufferToHex(recoveredPublicKeyBuffer);
+        const recoveredAddressBuffer = ethereumjs_util_1.publicToAddress(recoveredPublicKey);
+        const recoveredAddress = ethereumjs_util_1.bufferToHex(recoveredAddressBuffer);
+        expect(recoveredAddress).toEqual('0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a');
+        const solidityRecoverredAddress = await cryptoTest.ecrecover(expectOrderHash, v, r, s);
+        // returned value is 0x9bffbe28cec8656bf6cbdff5f4159d220c0a2a1b1740646430cccea2f7c80491
+        expect(solidityRecoverredAddress).toEqual("0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A");
+    }, 30000);
+    test("signing message and recovering the signing address", () => {
+        const privateKey = '0x1111111111111111111111111111111111111111111111111111111111111111';
+        const wallet = new ethers_1.Wallet(privateKey);
+        expect(wallet.address).toEqual('0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
+        const orderParams = [
+            '0x7564105E977516C53bE337314c7E53838967bDaC',
+            10,
+            '0xe1fAE9b4fAB2F5726677ECfA912d96b0B683e6a9',
+            20,
+            1000,
+            0
+        ];
+        const orderHash = ethers_1.utils.soliditySha256(['address', 'uint', 'address', 'uint', 'uint', 'uint'], orderParams);
+        expect(orderHash).toEqual('0x5965b604c8a3aeea98bac96fde194ce36307b45c97048484c9662ef3320baed2');
+        const signingKey = new ethers_1.SigningKey(privateKey);
+        const signature = signingKey.signDigest(orderHash);
+        // returned from personal.sign('0x5965b604c8a3aeea98bac96fde194ce36307b45c97048484c9662ef3320baed2',eth.accounts[0],"EtherDelta");
+        //0x6bc59476415408a42010c18434cdc6e227dc307cca4e7f7b1fe354174af9cab833cc7f9fdd756c2557e9cc6b03b5caee3a3eb0e1f5652ccda8ffdaf6584d9c7f1c
+        const gethSignature = '0x6bc59476415408a42010c18434cdc6e227dc307cca4e7f7b1fe354174af9cab833cc7f9fdd756c2557e9cc6b03b5caee3a3eb0e1f5652ccda8ffdaf6584d9c7f1c';
+        const r = gethSignature.slice(0, 66);
+        const s = '0x' + gethSignature.slice(66, 129);
+        const v = '0x' + gethSignature.slice(129, 131);
+        // Example from live contract
+        //0x268bcb93f05ab895d96cdc87a46ac9fcddf0c1fe4824dd6453c30f7ab8ec7e83 // r value
+        //0x2323f4c1717cb105a1dbd5eb1e48398af704fbdcc4c3b20d1efa9d3680e45196 // s value
+        //01c   // v value
+        expect(signature.r).toEqual('0x6bc59476415408a42010c18434cdc6e227dc307cca4e7f7b1fe354174af9cab8');
+        expect(signature.s).toEqual('0x33cc7f9fdd756c2557e9cc6b03b5caee3a3eb0e1f5652ccda8ffdaf6584d9c7f');
+        expect(signature.recoveryParam).toEqual(0);
+        const recoveredAddress = ethers_1.SigningKey.recover(orderHash, signature.r, signature.s, signature.recoveryParam);
+        expect(recoveredAddress).toEqual('0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
+    });
+});
+//# sourceMappingURL=testCrypto.test.js.map

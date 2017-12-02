@@ -5,20 +5,24 @@ const VError = require("verror");
 const logger = require("config-logger");
 const fs_1 = require("fs");
 class BaseContract {
-    constructor(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultGasPrice = 1000000000, defaultGasLimit = 120000) {
+    constructor(transactionsProvider, eventsProvider, keyStore, jsonInterface, contractBinary, contractAddress, defaultSendOptions = {
+            gasPrice: 1000000000,
+            gasLimit: 1200000
+        }) {
         this.transactionsProvider = transactionsProvider;
         this.eventsProvider = eventsProvider;
         this.keyStore = keyStore;
         this.jsonInterface = jsonInterface;
         this.contractBinary = contractBinary;
-        this.defaultGasPrice = defaultGasPrice;
-        this.defaultGasLimit = defaultGasLimit;
+        this.defaultSendOptions = defaultSendOptions;
         this.contract = new ethers_1.Contract(contractAddress, jsonInterface, this.transactionsProvider);
     }
     // deploy a new contract
-    deployContract(contractOwner, gasLimit, gasPrice, ...contractConstructorParams) {
+    deployContract(contractOwner, overrideSendOptions, ...contractConstructorParams) {
         const self = this;
-        const description = `deploy contract from sender address ${contractOwner}, gas limit ${gasLimit} and gas price ${gasPrice}`;
+        // override the default send options
+        const sendOptions = Object.assign({}, this.defaultSendOptions, overrideSendOptions);
+        const description = `deploy contract from sender address ${contractOwner}, gas limit ${sendOptions.gasLimit} and gas price ${sendOptions.gasPrice}`;
         return new Promise(async (resolve, reject) => {
             logger.debug(`About to ${description}`);
             if (!self.contractBinary) {
@@ -30,15 +34,57 @@ class BaseContract {
                 const deployTransactionData = ethers_1.Contract.getDeployTransaction(self.contractBinary, self.jsonInterface, ...contractConstructorParams);
                 const privateKey = await self.keyStore.getPrivateKey(contractOwner);
                 const wallet = new ethers_1.Wallet(privateKey, self.transactionsProvider);
-                const deployTransaction = Object.assign(deployTransactionData, {
-                    gasPrice: gasPrice || self.defaultGasPrice,
-                    gasLimit: gasLimit || self.defaultGasLimit
-                });
+                const deployTransaction = Object.assign(deployTransactionData, sendOptions);
                 // Send the transaction
                 const broadcastTransaction = await wallet.sendTransaction(deployTransaction);
                 logger.debug(`${broadcastTransaction.hash} is transaction hash for ${description}`);
-                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, gasLimit);
+                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, sendOptions.gasLimit);
                 self.contract = new ethers_1.Contract(transactionReceipt.contractAddress, self.jsonInterface, wallet);
+                resolve(transactionReceipt);
+            }
+            catch (err) {
+                const error = new VError(err, `Failed to ${description}.`);
+                logger.error(error.stack);
+                reject(error);
+            }
+        });
+    }
+    async call(functionName, ...callParams) {
+        const description = `calling function ${functionName} with params ${callParams.toString()} on contract with address ${this.contract.address}`;
+        try {
+            const results = await this.contract[functionName](...callParams);
+            let result = results[0];
+            // if an Ethers BigNumber
+            if (results[0]._bn) {
+                // convert to a bn.js BigNumber
+                result = results[0]._bn;
+            }
+            logger.info(`Got ${result} ${description}`);
+            return result;
+        }
+        catch (err) {
+            const error = new VError(err, `Could not get ${description}`);
+            logger.error(error.stack);
+            throw error;
+        }
+    }
+    async send(functionName, txSignerAddress, overrideSendOptions, ...callParams) {
+        const self = this;
+        // override the default send options
+        const sendOptions = Object.assign({}, this.defaultSendOptions, overrideSendOptions);
+        const description = `send transaction to function ${functionName} with parameters ${callParams}, gas limit ${sendOptions.gasLimit} and gas price ${sendOptions.gasPrice} on contract with address ${this.contract.address}`;
+        return new Promise(async (resolve, reject) => {
+            try {
+                let contract = self.contract;
+                if (txSignerAddress) {
+                    const privateKey = await self.keyStore.getPrivateKey(txSignerAddress);
+                    const wallet = new ethers_1.Wallet(privateKey, self.transactionsProvider);
+                    contract = new ethers_1.Contract(self.contract.address, self.jsonInterface, wallet);
+                }
+                // send the transaction
+                const broadcastTransaction = await contract[functionName](...callParams, sendOptions);
+                logger.debug(`${broadcastTransaction.hash} is transaction hash and nonce ${broadcastTransaction.nonce} for ${description}`);
+                const transactionReceipt = await self.processTransaction(broadcastTransaction.hash, description, sendOptions.gasLimit);
                 resolve(transactionReceipt);
             }
             catch (err) {
@@ -109,11 +155,11 @@ class BaseContract {
         }
     }
     static loadJsonInterfaceFromFile(filename) {
-        const jsonInterfaceStr = fs_1.readFileSync(filename, 'utf8');
+        const jsonInterfaceStr = fs_1.readFileSync(filename + ".abi", 'utf8');
         return JSON.parse(jsonInterfaceStr);
     }
     static loadBinaryFromFile(filename) {
-        return '0x' + fs_1.readFileSync(filename, 'utf8');
+        return '0x' + fs_1.readFileSync(filename + ".bin", 'utf8');
     }
 }
 exports.default = BaseContract;
